@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { publicEnv } from '@/lib/env';
 import { describeOutcome, sendOrderEmail } from '@/lib/email/send';
 import { orderShippedEmail } from '@/lib/email/templates';
+import { sendWhatsAppOrderConfirmation } from '@/lib/whatsapp/send';
 import { createClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { orderStatusSchema, shipmentSchema } from '@/lib/validation';
@@ -371,6 +372,83 @@ export async function updateShipmentTrackingAction(input: unknown): Promise<Acti
   });
 
   return { ok: true, message: describeOutcome(outcome, 'Tracking saved.') };
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp resend
+// ---------------------------------------------------------------------------
+
+const resendWhatsAppInput = z.object({ orderId: z.string().uuid() });
+
+/**
+ * Retries a WhatsApp order confirmation that failed. Consent is preserved by
+ * requiring an existing whatsapp_order_confirmation log row: the checkout only
+ * writes one for customers who ticked the opt-in box, so an order with no row
+ * is never messaged from here. Delivery stays single-shot through the sender's
+ * own claim-before-send, so a double click cannot send twice.
+ */
+export async function resendWhatsAppConfirmationAction(input: unknown): Promise<ActionResult> {
+  const admin = await requireAdmin();
+
+  const parsed = resendWhatsAppInput.safeParse(input);
+  if (!parsed.success) return { ok: false, error: 'Invalid order.' };
+  const { orderId } = parsed.data;
+
+  const supabase = await createClient();
+
+  const { data: order } = await supabase
+    .from('orders')
+    .select('order_number, total_paise, customers ( name, phone )')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  if (!order) return { ok: false, error: 'Order not found.' };
+
+  const customer = order.customers as unknown as { name: string; phone: string | null } | null;
+  if (!customer?.phone) {
+    return { ok: false, error: 'This order has no phone number on record.' };
+  }
+
+  const { data: logs } = await supabase
+    .from('notification_logs')
+    .select('status')
+    .eq('order_id', orderId)
+    .eq('notification_type', 'whatsapp_order_confirmation');
+
+  if (!logs || logs.length === 0) {
+    return {
+      ok: false,
+      error: 'The customer did not opt in to WhatsApp for this order, so no message can be sent.',
+    };
+  }
+
+  const outcome = await sendWhatsAppOrderConfirmation({
+    orderId,
+    orderNumber: order.order_number,
+    phone: customer.phone,
+    customerName: customer.name,
+    totalPaise: order.total_paise,
+  });
+
+  await recordAudit(admin, {
+    action: 'order.whatsapp_resent',
+    entityType: 'order',
+    entityId: orderId,
+    metadata: { order_number: order.order_number, outcome: outcome.status },
+  });
+
+  revalidateOrderPaths(order.order_number);
+
+  switch (outcome.status) {
+    case 'sent':
+      return { ok: true, message: 'WhatsApp confirmation sent.' };
+    case 'duplicate':
+      return { ok: true, message: 'A WhatsApp confirmation was already sent for this order.' };
+    case 'skipped':
+    case 'not_configured':
+    case 'failed':
+      return { ok: false, error: `WhatsApp message NOT sent — ${outcome.message}` };
+  }
 }
 
 // ---------------------------------------------------------------------------

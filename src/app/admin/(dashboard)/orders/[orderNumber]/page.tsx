@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/server';
 import type { NotificationType, OrderStatus, PaymentStatus } from '@/lib/database.types';
 
 import { OrderStatusForm } from './order-status-form';
+import { ResendWhatsAppButton } from './resend-whatsapp-button';
 import { TrackingForm } from './tracking-form';
 
 export const dynamic = 'force-dynamic';
@@ -102,6 +103,14 @@ export default async function AdminOrderDetailPage({
     .order('created_at', { ascending: false });
 
   const customer = order.customers;
+
+  // A WhatsApp row only exists for customers who opted in, so its presence is
+  // the consent check; resending is offered only while none has been delivered.
+  const whatsappRows = ((notificationRows ?? []) as unknown as NotificationRow[]).filter(
+    (n) => n.notification_type === 'whatsapp_order_confirmation',
+  );
+  const canResendWhatsApp =
+    whatsappRows.length > 0 && !whatsappRows.some((n) => n.status === 'sent');
 
   const detail: OrderDetailData = {
     orderNumber: order.order_number,
@@ -202,6 +211,7 @@ export default async function AdminOrderDetailPage({
                 ))}
               </ul>
             )}
+            {canResendWhatsApp ? <ResendWhatsAppButton orderId={order.id} /> : null}
           </section>
         </div>
 
