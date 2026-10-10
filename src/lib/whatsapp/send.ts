@@ -33,6 +33,51 @@ type SendArgs = {
   totalPaise: number;
 };
 
+/**
+ * Asks Meta why a token was rejected. Returns a short human-readable reason;
+ * never includes the token itself.
+ */
+async function inspectToken(token: string): Promise<string> {
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/${GRAPH_VERSION}/debug_token?input_token=${encodeURIComponent(token)}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(4000),
+      },
+    );
+    const json = (await response.json().catch(() => null)) as {
+      data?: {
+        is_valid?: boolean;
+        type?: string;
+        app_id?: string;
+        expires_at?: number;
+        scopes?: string[];
+        error?: { message?: string };
+      };
+      error?: { message?: string };
+    } | null;
+
+    if (json?.error?.message) return json.error.message;
+    const d = json?.data;
+    if (!d) return `no detail (HTTP ${response.status})`;
+    return [
+      `valid=${d.is_valid}`,
+      d.type ? `type=${d.type}` : null,
+      d.app_id ? `app=${d.app_id}` : null,
+      d.expires_at !== undefined
+        ? `expires=${d.expires_at === 0 ? 'never' : new Date(d.expires_at * 1000).toISOString().slice(0, 10)}`
+        : null,
+      d.scopes ? `scopes=${d.scopes.join('|')}` : null,
+      d.error?.message ? `reason=${d.error.message}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+  } catch {
+    return 'could not reach Meta to inspect the token';
+  }
+}
+
 export async function sendWhatsAppOrderConfirmation(args: SendArgs): Promise<WhatsAppOutcome> {
   if (!whatsappConfigured()) {
     return {
@@ -132,9 +177,12 @@ export async function sendWhatsAppOrderConfirmation(args: SendArgs): Promise<Wha
             .filter(Boolean)
             .join(', ')
         : null;
-      const message = e?.message
+      let message = e?.message
         ? `${e.message} (${detail})`
         : `WhatsApp API returned HTTP ${response.status}.`;
+      if (e?.code === 190 && env.WHATSAPP_ACCESS_TOKEN) {
+        message += ` Token check: ${await inspectToken(env.WHATSAPP_ACCESS_TOKEN)}`;
+      }
       await demote(message);
       return { status: 'failed', message };
     }
