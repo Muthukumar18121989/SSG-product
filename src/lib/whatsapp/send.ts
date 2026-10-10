@@ -107,12 +107,33 @@ export async function sendWhatsAppOrderConfirmation(args: SendArgs): Promise<Wha
 
     const json = (await response.json().catch(() => null)) as {
       messages?: { id?: string }[];
-      error?: { message?: string; code?: number };
+      error?: {
+        message?: string;
+        code?: number;
+        type?: string;
+        error_subcode?: number;
+        fbtrace_id?: string;
+      };
     } | null;
 
     if (!response.ok || json?.error) {
-      const message = json?.error?.message
-        ? `${json.error.message}${json.error.code ? ` (code ${json.error.code})` : ''}`
+      // Token length (never the token) and Meta's trace id make a rejected
+      // credential distinguishable from one that never reached the server.
+      const e = json?.error;
+      const detail = e
+        ? [
+            e.code ? `code ${e.code}` : null,
+            e.error_subcode ? `subcode ${e.error_subcode}` : null,
+            e.type ?? null,
+            `HTTP ${response.status}`,
+            `token length ${env.WHATSAPP_ACCESS_TOKEN?.length ?? 0}`,
+            e.fbtrace_id ? `trace ${e.fbtrace_id}` : null,
+          ]
+            .filter(Boolean)
+            .join(', ')
+        : null;
+      const message = e?.message
+        ? `${e.message} (${detail})`
         : `WhatsApp API returned HTTP ${response.status}.`;
       await demote(message);
       return { status: 'failed', message };

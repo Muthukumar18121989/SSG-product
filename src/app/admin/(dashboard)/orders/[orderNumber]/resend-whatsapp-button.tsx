@@ -13,9 +13,17 @@ export function ResendWhatsAppButton({ orderId }: { orderId: string }) {
   async function handleClick() {
     setSubmitting(true);
     setResult(null);
-    const res = await resendWhatsAppConfirmationAction({ orderId });
-    setResult(res.ok ? { ok: true, message: res.message } : { ok: false, message: res.error });
-    setSubmitting(false);
+    try {
+      const res = await resendWhatsAppConfirmationAction({ orderId });
+      setResult(res.ok ? { ok: true, message: res.message } : { ok: false, message: res.error });
+    } catch {
+      setResult({
+        ok: false,
+        message: 'The request failed. Refresh the page and try again (the site may have just been updated).',
+      });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
