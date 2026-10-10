@@ -34,6 +34,22 @@ type SendArgs = {
 };
 
 /**
+ * Describes the shape of a stored token without revealing it: enough to tell
+ * a duplicated paste or a stray invisible character from a genuine rejection.
+ */
+function describeTokenShape(token: string): string {
+  const odd = [...token].filter((c) => !/[A-Za-z0-9]/.test(c));
+  const codes = [...new Set(odd.map((c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`))];
+  const head = token.slice(0, 12);
+  return [
+    `prefix ${token.slice(0, 4)}`,
+    `${token.length} chars`,
+    `start-repeats=${token.indexOf(head, 1) !== -1}`,
+    `non-alphanumeric=${odd.length}${codes.length ? ` [${codes.join(',')}]` : ''}`,
+  ].join(', ');
+}
+
+/**
  * Asks Meta why a token was rejected. Returns a short human-readable reason;
  * never includes the token itself.
  */
@@ -181,7 +197,7 @@ export async function sendWhatsAppOrderConfirmation(args: SendArgs): Promise<Wha
         ? `${e.message} (${detail})`
         : `WhatsApp API returned HTTP ${response.status}.`;
       if (e?.code === 190 && env.WHATSAPP_ACCESS_TOKEN) {
-        message += ` Token check: ${await inspectToken(env.WHATSAPP_ACCESS_TOKEN)}`;
+        message += ` Token check: ${await inspectToken(env.WHATSAPP_ACCESS_TOKEN)}. Token shape: ${describeTokenShape(env.WHATSAPP_ACCESS_TOKEN)}.`;
       }
       await demote(message);
       return { status: 'failed', message };
